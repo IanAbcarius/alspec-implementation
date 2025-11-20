@@ -1,10 +1,12 @@
 import argparse
 import sys
 import shlex
+import asyncio
 from api.client import InferenceClient
 from cli.commands.model_commands import ModelCommands
 from cli.commands.inference_commands import InferenceCommands
 from cli.commands.system_commands import SystemCommands
+from cli.chat import chat_session
 
 class InferenceCLI:
     def __init__(self):
@@ -50,6 +52,9 @@ class InferenceCLI:
         system_subparsers.add_parser('status', help='Check system status')
         system_subparsers.add_parser('stats', help='Show performance statistics')
         
+        # Chat command (WebSocket)
+        subparsers.add_parser('chat', help='Interactive chat session over WebSocket')
+        
         return parser
     
     def handle_model_command(self, args):
@@ -93,6 +98,8 @@ class InferenceCLI:
                 self.handle_inference_command(args)
             elif args.command == 'system':
                 self.handle_system_command(args)
+            elif args.command == 'chat':
+                asyncio.run(chat_session())            
                 
         except SystemExit:
             # argparse calls sys.exit() on help or error, we want to continue
@@ -151,6 +158,8 @@ def main():
                 cli.handle_inference_command(args)
             elif args.command == 'system':
                 cli.handle_system_command(args)
+            elif args.command == 'chat':
+                asyncio.run(chat_session())
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)
