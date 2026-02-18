@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 # Path to llama-cli binary on Marshall's server
 LLAMA_BIN = (
@@ -18,93 +18,80 @@ LLAMA_BIN = (
 
 SYSTEM_PROMPT = "You are a helpful assistant."
 
-# GLOBAL persistent llama process
-_llama_proc: Optional[asyncio.subprocess.Process] = None
+LOG_OUTPUT = "/home/alspec/implementation/server-core/logs/log_$(date +%Y%m%d_%H%M%S)_${MODEL}.txt"
+
+MODEL_PATH = (
+    Path.home()
+    / "implementation"
+    / "server-core"
+    / "model_storage"
+    / "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+)
 
 
-async def start_llama_if_needed() -> None:
+def build_cmd(prompt: str) -> list[str]:
     """
-    Start the llama-cli persistent REPL if not already running.
+    Build the llama-cli command for a *single* user turn.
 
-    We intentionally use llama.cpp's built-in chat interface:
-        ./llama-cli -m <model> --system-prompt "..."
-    so it remembers conversation history and keeps a KV cache alive.
+    This matches what CovalentCarbon described:
+      - use --system-prompt
+      - send the user text via --prompt
+      - add -no-cnv so llama.cpp doesn't enter its chat UI
+
+    We run one process per request, so no REPL / prompt parsing needed.
     """
-    global _llama_proc
-    if _llama_proc is not None:
-        return
-
-    model_path = (
-        Path.home()
-        / "implementation"
-        / "server-core"
-        / "model_storage"
-        / "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-    )
-
     if not LLAMA_BIN.is_file():
         raise RuntimeError(f"llama-cli not found at {LLAMA_BIN}")
-    if not model_path.is_file():
-        raise RuntimeError(f"Model file not found at {model_path}")
+    if not MODEL_PATH.is_file():
+        raise RuntimeError(f"Model file not found at {MODEL_PATH}")
 
-    cmd = [
+    prompt = prompt.strip() or "Hello from ALSPEC project"
+
+    return [
         str(LLAMA_BIN),
         "-m",
-        str(model_path),
+        str(MODEL_PATH),
         "--system-prompt",
         SYSTEM_PROMPT,
+        "--prompt",
+        prompt,
         "-n",
         "256",
         "--split-mode",
-        "none",
+        "row",
         "--main-gpu",
         "0",
+        "-no-cnv" 
     ]
-
-    _llama_proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    # Give llama.cpp a moment to print its banner / warmup.
-    # We don't try to consume it here; the first user message
-    # will flush any remaining startup text.
-    await asyncio.sleep(1.0)
 
 
 async def send_and_stream(user_msg: str) -> AsyncGenerator[str, None]:
     """
-    Send a user message into the running llama-cli REPL and stream output.
+    Run llama-cli once for this user_msg and stream its stdout.
 
-    We write the text to stdin, then read stdout until we see a new prompt
-    ("> " on its own line). This is a best-effort heuristic that matches
-    llama.cpp's interactive mode well enough for the demo.
+    The WebSocket layer (api/server.py) will:
+      - call this generator
+      - forward chunks to the client
+      - then send [[END_OF_RESPONSE]] when we're done
     """
-    await start_llama_if_needed()
-    assert _llama_proc is not None
-    assert _llama_proc.stdin is not None
-    assert _llama_proc.stdout is not None
+    cmd = build_cmd(user_msg)
 
-    # Send the user message and a newline so llama.cpp treats it as one turn.
-    _llama_proc.stdin.write((user_msg + "\n").encode("utf-8"))
-    await _llama_proc.stdin.drain()
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
 
-    buffer = ""
+    assert proc.stdout is not None
+
+    # Stream stdout as it is produced
     while True:
-        chunk = await _llama_proc.stdout.read(128)
+        chunk = await proc.stdout.read(256)
         if not chunk:
-            # Process ended unexpectedly.
-            if buffer:
-                yield buffer
             break
-
         text = chunk.decode("utf-8", errors="ignore")
-        buffer += text
-        yield text
+        if text:
+            yield text
 
-        # Heuristic: when the interactive prompt returns ("\n> "),
-        # llama.cpp is waiting for the next user turn.
-        if "\n> " in buffer or buffer.endswith("\n> ") or buffer.endswith("> "):
-            break
+    # Optional: if you want to debug later, you can read stderr here.
+    await proc.wait()

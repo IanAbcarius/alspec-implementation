@@ -10,7 +10,7 @@ WS_URL = APP_SERVER_URL.replace("http", "ws") + "/ws/chat"
 
 async def chat_session():
     print(f"Connecting to server at {WS_URL} ...")
-    async with websockets.connect(WS_URL) as ws:
+    async with websockets.connect(WS_URL, ping_interval=None) as ws:
         print("Connected. Type messages. Ctrl+C to exit.\n")
 
         while True:

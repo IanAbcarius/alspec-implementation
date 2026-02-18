@@ -1,0 +1,6 @@
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 2 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 2070 SUPER, compute capability 7.5, VMM: yes
+  Device 1: NVIDIA GeForce RTX 2060 SUPER, compute capability 7.5, VMM: yes
+error: invalid argument: -no-cvn
